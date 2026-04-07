@@ -1,0 +1,203 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# BIZHOST Installer v2.0 — BIZ FACTORY @bizft
+
+# ───── COLORS ─────
+R='\e[0m'
+GRN='\e[1;32m'
+CYN='\e[1;36m'
+YLW='\e[1;33m'
+MAG='\e[1;35m'
+RED='\e[1;31m'
+WHT='\e[1;37m'
+DIM='\e[2m'
+
+clear
+
+# ───── BANNER (all lines colored properly) ─────
+echo -e "${GRN}"
+echo "  ██████╗ ██╗███████╗    ██╗  ██╗ ██████╗ ███████╗████████╗"
+echo "  ██╔══██╗██║╚══███╔╝    ██║  ██║██╔═══██╗██╔════╝╚══██╔══╝"
+echo "  ██████╔╝██║  ███╔╝     ███████║██║   ██║███████╗   ██║   "
+echo -e "${CYN}"
+echo "  ██╔══██╗██║ ███╔╝      ██╔══██║██║   ██║╚════██║   ██║   "
+echo "  ██████╔╝██║███████╗    ██║  ██║╚██████╔╝███████║   ██║   "
+echo "  ╚═════╝ ╚═╝╚══════╝    ╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝   "
+echo -e "${R}"
+
+echo -e "${MAG}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${R}"
+echo -e "${YLW}        ⚡ BIZHOST INSTALLER — BIZ FACTORY ⚡${R}"
+echo -e "${GRN}        Version 2.0 • @bizft${R}"
+echo -e "${MAG}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${R}"
+echo ""
+
+sleep 0.5
+
+# ───── PRE-FLIGHT CHECKS ─────
+echo -e "${CYN}  [~] Running pre-flight checks...${R}"
+sleep 0.4
+
+# Check Termux environment
+if [ ! -d "$PREFIX" ]; then
+    echo -e "${RED}  [✗] This script requires Termux on Android.${R}"
+    echo -e "${DIM}      Install Termux from F-Droid and try again.${R}"
+    exit 1
+fi
+echo -e "${GRN}  [✔] Termux environment detected${R}"
+sleep 0.3
+
+# Check internet
+if ! ping -c 1 -W 3 8.8.8.8 > /dev/null 2>&1; then
+    echo -e "${RED}  [✗] No internet connection.${R}"
+    echo -e "${DIM}      Connect to internet and try again.${R}"
+    exit 1
+fi
+echo -e "${GRN}  [✔] Internet connection OK${R}"
+sleep 0.3
+
+echo ""
+
+# ───── PACKAGE INSTALL ─────
+echo -e "${CYN}  [~] Updating package list...${R}"
+pkg update -y -q 2>/dev/null
+echo -e "${GRN}  [✔] Packages updated${R}"
+sleep 0.3
+
+echo -e "${CYN}  [~] Installing PHP...${R}"
+pkg install php -y -q 2>/dev/null
+if command -v php > /dev/null 2>&1; then
+    PHP_VER=$(php -r 'echo PHP_VERSION;')
+    echo -e "${GRN}  [✔] PHP $PHP_VER installed${R}"
+else
+    echo -e "${RED}  [✗] PHP installation failed!${R}"
+    exit 1
+fi
+sleep 0.3
+
+echo -e "${CYN}  [~] Installing Cloudflared...${R}"
+pkg install cloudflared -y -q 2>/dev/null
+if command -v cloudflared > /dev/null 2>&1; then
+    echo -e "${GRN}  [✔] Cloudflared installed${R}"
+else
+    echo -e "${YLW}  [!] Cloudflared not available via pkg, trying manual...${R}"
+    ARCH=$(uname -m)
+    CF_URL=""
+    case "$ARCH" in
+        aarch64) CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64" ;;
+        armv7l)  CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm" ;;
+        x86_64)  CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64" ;;
+    esac
+    if [ -n "$CF_URL" ]; then
+        curl -L --max-time 60 "$CF_URL" -o "$PREFIX/bin/cloudflared"
+        chmod +x "$PREFIX/bin/cloudflared"
+        echo -e "${GRN}  [✔] Cloudflared installed manually${R}"
+    else
+        echo -e "${RED}  [✗] Unsupported architecture: $ARCH${R}"
+        echo -e "${DIM}      Tunneling will not work. Server will still work.${R}"
+    fi
+fi
+sleep 0.3
+
+echo ""
+
+# ───── STORAGE PERMISSION ─────
+echo -e "${YLW}  [!] Requesting storage permission...${R}"
+echo -e "${DIM}      Please tap ALLOW in the popup!${R}"
+sleep 1
+termux-setup-storage
+sleep 2
+echo -e "${GRN}  [✔] Storage setup done${R}"
+echo ""
+
+# ───── CREATE HOSTING DIRECTORY ─────
+SITE="/storage/emulated/0/BIZHOST"
+echo -e "${CYN}  [~] Creating hosting directory...${R}"
+mkdir -p "$SITE"
+echo -e "${GRN}  [✔] Directory created: $SITE${R}"
+sleep 0.3
+
+# ───── DEFAULT INDEX.PHP ─────
+cat > "$SITE/index.php" << 'PHPEOF'
+<?php
+$host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+$server = php_uname('n');
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BIZHOST — Server Active</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: #0a0a0f;
+    color: #e0e0e0;
+    font-family: 'Courier New', monospace;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh;
+  }
+  .card {
+    border: 1px solid #00ff9d;
+    padding: 40px;
+    max-width: 500px;
+    width: 90%;
+    text-align: center;
+    box-shadow: 0 0 30px #00ff9d22;
+  }
+  .status { color: #00ff9d; font-size: 13px; letter-spacing: 4px; margin-bottom: 20px; }
+  h1 { color: #fff; font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+  .sub { color: #888; font-size: 13px; margin-bottom: 30px; }
+  .info { background: #111; border: 1px solid #222; padding: 16px; margin: 8px 0; text-align:left; font-size: 13px; }
+  .info span { color: #00ff9d; }
+  .brand { margin-top: 30px; color: #444; font-size: 12px; }
+  .brand a { color: #00ff9d; text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="status">● SERVER ONLINE</div>
+  <h1>BIZHOST</h1>
+  <div class="sub">Your PHP server is running</div>
+  <div class="info">Host   : <span><?= htmlspecialchars($host) ?></span></div>
+  <div class="info">PHP    : <span><?= PHP_VERSION ?></span></div>
+  <div class="info">Time   : <span><?= date('Y-m-d H:i:s') ?></span></div>
+  <div class="info">Root   : <span><?= htmlspecialchars($_SERVER['DOCUMENT_ROOT'] ?? '—') ?></span></div>
+  <div class="brand">Powered by <a href="https://t.me/bizft">@bizft — BIZ FACTORY</a></div>
+</div>
+</body>
+</html>
+PHPEOF
+
+echo -e "${GRN}  [✔] Default index.php created${R}"
+sleep 0.3
+
+# ───── INSTALL BIZHOST BINARY ─────
+echo -e "${CYN}  [~] Installing bizhost command...${R}"
+if [ -f "bizhost" ]; then
+    chmod +x bizhost
+    cp bizhost "$PREFIX/bin/bizhost"
+    echo -e "${GRN}  [✔] bizhost installed to PATH${R}"
+else
+    echo -e "${YLW}  [!] Local bizhost not found, downloading...${R}"
+    curl -L "https://raw.githubusercontent.com/bizft/BIZHOST/refs/heads/master/bizhost" \
+         -o "$PREFIX/bin/bizhost"
+    chmod +x "$PREFIX/bin/bizhost"
+    echo -e "${GRN}  [✔] bizhost downloaded and installed${R}"
+fi
+sleep 0.3
+
+echo ""
+
+# ───── DONE ─────
+echo -e "${GRN}  ╔══════════════════════════════════════════════╗${R}"
+echo -e "${GRN}  ║                                              ║${R}"
+echo -e "${GRN}  ║        ✓  INSTALLATION COMPLETE!            ║${R}"
+echo -e "${GRN}  ║                                              ║${R}"
+echo -e "${GRN}  ╠══════════════════════════════════════════════╣${R}"
+echo -e "${GRN}  ║${R}  ${WHT}Site Root :${R} ${YLW}$SITE${R}   ${GRN}║${R}"
+echo -e "${GRN}  ║${R}  ${WHT}Command   :${R} ${CYN}bizhost${R}                          ${GRN}║${R}"
+echo -e "${GRN}  ║${R}  ${WHT}Author    :${R} ${MAG}@bizft — BIZ FACTORY${R}            ${GRN}║${R}"
+echo -e "${GRN}  ╚══════════════════════════════════════════════╝${R}"
+echo ""
+echo -e "${YLW}  Run ${CYN}bizhost${YLW} to start!${R}"
+echo ""

@@ -1,0 +1,469 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# ╔══════════════════════════════════════════╗
+# ║   BIZHOST v2.0 — BIZ FACTORY @bizft     ║
+# ║   PHP Hosting Terminal for Termux        ║
+# ╚══════════════════════════════════════════╝
+
+VERSION="2.0"
+CONFIG="$PREFIX/tmp/bizhost.conf"
+PIDFILE="$PREFIX/tmp/bizhost.pid"
+WATCHDOG="$PREFIX/tmp/bizhost.watchdog"
+TUNNEL_LOG="$PREFIX/tmp/bizhost.tunnel.log"
+TUNNEL_PID="$PREFIX/tmp/bizhost.tunnel.pid"
+TUNNEL_URL_FILE="$PREFIX/tmp/bizhost.tunnel.url"
+SERVER_LOG="$PREFIX/tmp/bizhost.server.log"
+
+mkdir -p "$PREFIX/tmp"
+
+# ───── COLORS ─────
+R='\e[0m'
+BLD='\e[1m'
+DIM='\e[2m'
+RED='\e[1;31m'
+GRN='\e[1;32m'
+YLW='\e[1;33m'
+CYN='\e[1;36m'
+MAG='\e[1;35m'
+WHT='\e[1;37m'
+BLU='\e[1;34m'
+
+# ───── LOAD CONFIG ─────
+if [ -f "$CONFIG" ]; then
+    source "$CONFIG"
+fi
+
+# Defaults if not set by config
+SITE="${SITE:-/storage/emulated/0/BIZHOST}"
+PORT="${PORT:-8080}"
+
+# Save config helper
+save_config() {
+    echo "SITE=\"$SITE\"" > "$CONFIG"
+    echo "PORT=$PORT" >> "$CONFIG"
+}
+
+# Init config if fresh
+[ ! -f "$CONFIG" ] && save_config
+mkdir -p "$SITE"
+
+# ───── STATUS HELPERS ─────
+
+is_server_running() {
+    local pid
+    [ -f "$PIDFILE" ] || return 1
+    pid=$(cat "$PIDFILE" 2>/dev/null)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+is_tunnel_running() {
+    local pid
+    [ -f "$TUNNEL_PID" ] || return 1
+    pid=$(cat "$TUNNEL_PID" 2>/dev/null)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+get_tunnel_url() {
+    [ -f "$TUNNEL_URL_FILE" ] && cat "$TUNNEL_URL_FILE" || echo ""
+}
+
+srv_badge() {
+    if is_server_running; then
+        echo -e "${GRN}● RUNNING${R}"
+    else
+        echo -e "${RED}○ STOPPED${R}"
+    fi
+}
+
+tun_badge() {
+    if is_tunnel_running; then
+        local url; url=$(get_tunnel_url)
+        if [ -n "$url" ]; then
+            echo -e "${GRN}● ACTIVE${R} ${DIM}$url${R}"
+        else
+            echo -e "${YLW}◌ STARTING...${R}"
+        fi
+    else
+        echo -e "${DIM}○ OFF${R}"
+    fi
+}
+
+# ───── BANNER ─────
+draw_banner() {
+    echo -e "${GRN}"
+    echo "  ██████╗ ██╗███████╗    ██╗  ██╗ ██████╗ ███████╗████████╗"
+    echo "  ██╔══██╗██║╚══███╔╝    ██║  ██║██╔═══██╗██╔════╝╚══██╔══╝"
+    echo "  ██████╔╝██║  ███╔╝     ███████║██║   ██║███████╗   ██║   "
+    echo -e "${CYN}"
+    echo "  ██╔══██╗██║ ███╔╝      ██╔══██║██║   ██║╚════██║   ██║   "
+    echo "  ██████╔╝██║███████╗    ██║  ██║╚██████╔╝███████║   ██║   "
+    echo "  ╚═════╝ ╚═╝╚══════╝    ╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝   "
+    echo -e "${R}"
+}
+
+# ───── MAIN MENU ─────
+draw_menu() {
+    clear
+    draw_banner
+
+    local srv_st; srv_st=$(srv_badge)
+    local tun_st; tun_st=$(tun_badge)
+
+    echo -e "  ${MAG}╔══════════════════════════════════════════════╗${R}"
+    printf  "  ${MAG}║${R}  ${YLW}⚡ BIZ HOST v%-4s${R}  ${DIM}@bizft — BIZ FACTORY${R}  ${MAG}║${R}\n" "$VERSION"
+    echo -e "  ${MAG}╠══════════════════════════════════════════════╣${R}"
+    printf  "  ${MAG}║${R}  ${WHT}User   :${R} %-38s${MAG}║${R}\n" "$(whoami)"
+    printf  "  ${MAG}║${R}  ${WHT}Port   :${R} %-38s${MAG}║${R}\n" "$PORT"
+    echo -e "  ${MAG}║${R}  ${WHT}Server :${R} $srv_st"
+    echo -e "  ${MAG}║${R}  ${WHT}Tunnel :${R} $tun_st"
+    echo -e "  ${MAG}╠══════════════════════════════════════════════╣${R}"
+    echo -e "  ${MAG}║${R}  ${DIM}Root: $SITE${R}"
+    echo -e "  ${MAG}╚══════════════════════════════════════════════╝${R}"
+    echo ""
+
+    echo -e "  ${GRN}┌──────────────────────────────────────────┐${R}"
+    echo -e "  ${GRN}│${R}  ${CYN}[1]${R} ▶  Start Server                       ${GRN}│${R}"
+    echo -e "  ${GRN}│${R}  ${CYN}[2]${R} 🌐 Create Public Tunnel               ${GRN}│${R}"
+    echo -e "  ${GRN}│${R}  ${CYN}[3]${R} ✖  Stop Tunnel                        ${GRN}│${R}"
+    echo -e "  ${GRN}│${R}  ${CYN}[4]${R} ■  Stop Server                        ${GRN}│${R}"
+    echo -e "  ${GRN}├──────────────────────────────────────────┤${R}"
+    echo -e "  ${GRN}│${R}  ${YLW}[5]${R} 📁 Open Site Folder                   ${GRN}│${R}"
+    echo -e "  ${GRN}│${R}  ${YLW}[6]${R} 📂 Set Site Directory                 ${GRN}│${R}"
+    echo -e "  ${GRN}│${R}  ${YLW}[7]${R} 🔧 Set Port ${DIM}(now: $PORT)${R}                  ${GRN}│${R}"
+    echo -e "  ${GRN}├──────────────────────────────────────────┤${R}"
+    echo -e "  ${GRN}│${R}  ${MAG}[8]${R} 📋 View Server Logs                   ${GRN}│${R}"
+    echo -e "  ${GRN}│${R}  ${MAG}[9]${R} ℹ  System Info                        ${GRN}│${R}"
+    echo -e "  ${GRN}│${R}  ${MAG}[U]${R} ⬆  Update BIZ HOST                    ${GRN}│${R}"
+    echo -e "  ${GRN}│${R}  ${RED}[X]${R} ⏻  Exit                               ${GRN}│${R}"
+    echo -e "  ${GRN}└──────────────────────────────────────────┘${R}"
+    echo ""
+    echo -ne "  ${CYN}${BLD}BIZHOST ❯ ${R}"
+}
+
+# ───── START SERVER ─────
+start_server() {
+    if is_server_running; then
+        echo -e "\n  ${YLW}[!] Server already running on port $PORT${R}"
+        sleep 1.5
+        return
+    fi
+
+    echo -e "\n  ${CYN}[~] Starting PHP server on port $PORT...${R}"
+
+    # Kill stale PHP on our port
+    pkill -f "php -S 127.0.0.1:$PORT" 2>/dev/null
+    [ -f "$WATCHDOG" ] && kill "$(cat "$WATCHDOG")" 2>/dev/null && rm -f "$WATCHDOG"
+    rm -f "$PIDFILE"
+
+    # Watchdog loop runs in background
+    (
+        while true; do
+            php -S "127.0.0.1:$PORT" -t "$SITE" >> "$SERVER_LOG" 2>&1 &
+            PHP_PID=$!
+            echo "$PHP_PID" > "$PIDFILE"
+
+            # Wait for server to respond (max 10s)
+            for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+                curl -sf --max-time 1 "http://127.0.0.1:$PORT" > /dev/null 2>&1 && break
+                sleep 0.5
+            done
+
+            wait "$PHP_PID"
+            # Only restart if watchdog file still exists (not a manual stop)
+            [ -f "$WATCHDOG" ] || break
+            sleep 1
+        done
+    ) &
+    echo $! > "$WATCHDOG"
+
+    # Give it a moment then verify
+    sleep 2
+    if is_server_running; then
+        echo -e "  ${GRN}╔══════════════════════════════════════╗${R}"
+        echo -e "  ${GRN}║  ✓ Server Started Successfully       ║${R}"
+        echo -e "  ${GRN}╠══════════════════════════════════════╣${R}"
+        echo -e "  ${GRN}║${R}  Local : ${CYN}http://localhost:$PORT${R}"
+        echo -e "  ${GRN}║${R}  Root  : ${DIM}$SITE${R}"
+        echo -e "  ${GRN}╚══════════════════════════════════════╝${R}"
+    else
+        echo -e "  ${RED}[✗] Server failed to start.${R}"
+        echo -e "  ${DIM}Check: is PHP installed? (pkg install php)${R}"
+    fi
+    sleep 2.5
+}
+
+# ───── CREATE TUNNEL ─────
+create_tunnel() {
+    if ! is_server_running; then
+        echo -e "\n  ${RED}[✗] Start the server first! (Option 1)${R}"
+        sleep 2
+        return
+    fi
+
+    if is_tunnel_running; then
+        local url; url=$(get_tunnel_url)
+        echo -e "\n  ${YLW}[!] Tunnel already active:${R}"
+        echo -e "  ${CYN}$url${R}"
+        sleep 2.5
+        return
+    fi
+
+    echo -e "\n  ${CYN}[~] Connecting to Cloudflare tunnel...${R}"
+    pkill cloudflared 2>/dev/null
+    rm -f "$TUNNEL_LOG" "$TUNNEL_URL_FILE"
+
+    # Start cloudflared in background
+    cloudflared tunnel --url "http://127.0.0.1:$PORT" > "$TUNNEL_LOG" 2>&1 &
+    CF_PID=$!
+    echo "$CF_PID" > "$TUNNEL_PID"
+
+    # Poll for URL (up to 25 seconds)
+    echo -ne "  ${DIM}Waiting for URL"
+    LINK=""
+    for i in $(seq 1 50); do
+        LINK=$(grep -o 'https://[-a-zA-Z0-9.]*trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | head -1)
+        [ -n "$LINK" ] && break
+        echo -ne "."
+        sleep 0.5
+    done
+    echo -e "${R}"
+
+    if [ -n "$LINK" ]; then
+        echo "$LINK" > "$TUNNEL_URL_FILE"
+        echo -e "  ${GRN}╔══════════════════════════════════════════════╗${R}"
+        echo -e "  ${GRN}║  🌐 TUNNEL ACTIVE — Share This Link!         ║${R}"
+        echo -e "  ${GRN}╠══════════════════════════════════════════════╣${R}"
+        echo -e "  ${GRN}║${R}  Local  : ${CYN}http://localhost:$PORT${R}"
+        echo -e "  ${GRN}║${R}  Public : ${YLW}$LINK${R}"
+        echo -e "  ${GRN}╠══════════════════════════════════════════════╣${R}"
+        echo -e "  ${GRN}║${R}  ${DIM}Tunnel runs in background.${R}                  ${GRN}║${R}"
+        echo -e "  ${GRN}║${R}  ${DIM}Use [3] to stop it.${R}                         ${GRN}║${R}"
+        echo -e "  ${GRN}╚══════════════════════════════════════════════╝${R}"
+    else
+        echo -e "  ${RED}[✗] Tunnel failed. Possible causes:${R}"
+        echo -e "  ${DIM}  • No internet connection${R}"
+        echo -e "  ${DIM}  • cloudflared not installed (pkg install cloudflared)${R}"
+        echo -e "  ${DIM}  • Cloudflare servers unreachable${R}"
+        kill "$CF_PID" 2>/dev/null
+        rm -f "$TUNNEL_PID"
+    fi
+    sleep 3.5
+}
+
+# ───── STOP TUNNEL ─────
+stop_tunnel() {
+    if is_tunnel_running; then
+        kill "$(cat "$TUNNEL_PID")" 2>/dev/null
+        pkill cloudflared 2>/dev/null
+        rm -f "$TUNNEL_PID" "$TUNNEL_URL_FILE"
+        echo -e "\n  ${GRN}[✔] Tunnel stopped.${R}"
+    else
+        echo -e "\n  ${YLW}[!] No tunnel is running.${R}"
+    fi
+    sleep 1.5
+}
+
+# ───── STOP SERVER ─────
+stop_server() {
+    echo -e "\n  ${CYN}[~] Stopping server...${R}"
+
+    # Stop tunnel first if running
+    if is_tunnel_running; then
+        kill "$(cat "$TUNNEL_PID")" 2>/dev/null
+        pkill cloudflared 2>/dev/null
+        rm -f "$TUNNEL_PID" "$TUNNEL_URL_FILE"
+    fi
+
+    # Kill watchdog first so it doesn't restart PHP
+    if [ -f "$WATCHDOG" ]; then
+        kill "$(cat "$WATCHDOG")" 2>/dev/null
+        rm -f "$WATCHDOG"
+    fi
+
+    # Kill PHP using stored PID (safer than pkill php)
+    if [ -f "$PIDFILE" ]; then
+        kill "$(cat "$PIDFILE")" 2>/dev/null
+        rm -f "$PIDFILE"
+    fi
+
+    # Final sweep for our port
+    pkill -f "php -S 127.0.0.1:$PORT" 2>/dev/null
+
+    echo -e "  ${GRN}[✔] Server and tunnel stopped.${R}"
+    sleep 2
+}
+
+# ───── SET DIRECTORY ─────
+set_directory() {
+    echo -e "\n  ${WHT}Current directory:${R} ${DIM}$SITE${R}"
+    echo -e "  ${CYN}Enter new path (ENTER to cancel):${R}"
+    echo -ne "  → "
+    read -r NEWDIR
+
+    if [ -n "$NEWDIR" ]; then
+        if mkdir -p "$NEWDIR" 2>/dev/null; then
+            SITE="$NEWDIR"
+            save_config
+            echo -e "  ${GRN}[✔] Directory set to:${R} $SITE"
+            echo -e "  ${YLW}[!] Restart server to apply.${R}"
+        else
+            echo -e "  ${RED}[✗] Cannot create directory. Check path/permissions.${R}"
+        fi
+    else
+        echo -e "  ${DIM}Cancelled.${R}"
+    fi
+    sleep 2.5
+}
+
+# ───── SET PORT ─────
+set_port() {
+    echo -e "\n  ${WHT}Current port:${R} ${CYN}$PORT${R}"
+    echo -ne "  Enter new port (1024–65535): "
+    read -r NEWPORT
+
+    if [[ "$NEWPORT" =~ ^[0-9]+$ ]] && [ "$NEWPORT" -ge 1024 ] && [ "$NEWPORT" -le 65535 ]; then
+        PORT=$NEWPORT
+        save_config
+        echo -e "  ${GRN}[✔] Port set to $PORT${R}"
+        echo -e "  ${YLW}[!] Restart server to apply.${R}"
+    else
+        echo -e "  ${RED}[✗] Invalid port. Must be 1024–65535.${R}"
+    fi
+    sleep 2.5
+}
+
+# ───── VIEW LOGS ─────
+view_logs() {
+    clear
+    echo -e "${MAG}  ╔══════════════════════════════════════════════╗${R}"
+    echo -e "${MAG}  ║           📋 SERVER LOGS (last 40)           ║${R}"
+    echo -e "${MAG}  ╚══════════════════════════════════════════════╝${R}\n"
+
+    if [ -f "$SERVER_LOG" ] && [ -s "$SERVER_LOG" ]; then
+        tail -40 "$SERVER_LOG" | while IFS= read -r line; do
+            if echo "$line" | grep -qi "error\|fatal"; then
+                echo -e "  ${RED}$line${R}"
+            elif echo "$line" | grep -qi "200\|301\|304"; then
+                echo -e "  ${GRN}$line${R}"
+            elif echo "$line" | grep -qi "404\|403\|500"; then
+                echo -e "  ${YLW}$line${R}"
+            else
+                echo -e "  ${DIM}$line${R}"
+            fi
+        done
+    else
+        echo -e "  ${DIM}No logs yet. Start the server and make requests.${R}"
+    fi
+
+    echo ""
+    echo -e "${MAG}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${R}"
+    echo -ne "  ${DIM}Press ENTER to return...${R} "
+    read -r
+}
+
+# ───── SYSTEM INFO ─────
+show_info() {
+    clear
+    local php_ver; php_ver=$(php -r 'echo PHP_VERSION;' 2>/dev/null || echo "Not installed")
+    local cf_ver; cf_ver=$(cloudflared --version 2>/dev/null | head -1 || echo "Not installed")
+    local file_count; file_count=$(find "$SITE" -maxdepth 1 -type f 2>/dev/null | wc -l)
+    local disk_used; disk_used=$(du -sh "$SITE" 2>/dev/null | cut -f1)
+
+    echo -e "${MAG}  ╔══════════════════════════════════════════════╗${R}"
+    echo -e "${MAG}  ║              ℹ  SYSTEM INFO                  ║${R}"
+    echo -e "${MAG}  ╠══════════════════════════════════════════════╣${R}"
+    printf  "${MAG}  ║${R}  %-14s ${CYN}%-30s${R}${MAG}║${R}\n" "BIZHOST Ver"  "v$VERSION"
+    printf  "${MAG}  ║${R}  %-14s ${WHT}%-30s${R}${MAG}║${R}\n" "User"         "$(whoami)"
+    printf  "${MAG}  ║${R}  %-14s ${WHT}%-30s${R}${MAG}║${R}\n" "PHP"          "$php_ver"
+    printf  "${MAG}  ║${R}  %-14s ${WHT}%-30s${R}${MAG}║${R}\n" "Cloudflared"  "$cf_ver"
+    echo -e "${MAG}  ╠══════════════════════════════════════════════╣${R}"
+    printf  "${MAG}  ║${R}  %-14s ${YLW}%-30s${R}${MAG}║${R}\n" "Site Dir"     "$SITE"
+    printf  "${MAG}  ║${R}  %-14s ${YLW}%-30s${R}${MAG}║${R}\n" "Port"         "$PORT"
+    printf  "${MAG}  ║${R}  %-14s ${DIM}%-30s${R}${MAG}║${R}\n" "Files"        "${file_count} file(s)  (${disk_used:-?} used)"
+    echo -e "${MAG}  ╠══════════════════════════════════════════════╣${R}"
+
+    if is_server_running; then
+        printf "${MAG}  ║${R}  %-14s ${GRN}%-30s${R}${MAG}║${R}\n" "Server" "RUNNING (PID: $(cat "$PIDFILE" 2>/dev/null))"
+    else
+        printf "${MAG}  ║${R}  %-14s ${RED}%-30s${R}${MAG}║${R}\n" "Server" "STOPPED"
+    fi
+
+    if is_tunnel_running; then
+        local url; url=$(get_tunnel_url)
+        printf "${MAG}  ║${R}  %-14s ${GRN}%-30s${R}${MAG}║${R}\n" "Tunnel" "ACTIVE"
+        printf "${MAG}  ║${R}  %-14s ${CYN}%-30s${R}${MAG}║${R}\n" "Public URL" "${url:0:30}"
+    else
+        printf "${MAG}  ║${R}  %-14s ${DIM}%-30s${R}${MAG}║${R}\n" "Tunnel" "OFF"
+    fi
+
+    echo -e "${MAG}  ╚══════════════════════════════════════════════╝${R}"
+    echo ""
+    echo -ne "  ${DIM}Press ENTER to return...${R} "
+    read -r
+}
+
+# ───── UPDATE ─────
+do_update() {
+    clear
+    echo -e "\n  ${CYN}[~] Fetching latest BIZHOST from GitHub...${R}\n"
+    URL="https://raw.githubusercontent.com/bizft/BIZHOST/refs/heads/master/bizhost"
+    TARGET="$PREFIX/bin/bizhost"
+    TMPFILE="$PREFIX/tmp/bizhost.new"
+
+    curl -L --max-time 20 --progress-bar "$URL" -o "$TMPFILE"
+    if [ $? -eq 0 ] && [ -s "$TMPFILE" ]; then
+        mv "$TMPFILE" "$TARGET"
+        chmod +x "$TARGET"
+        echo -e "\n  ${GRN}[✔] Update complete!${R}"
+        echo -e "  ${YLW}Restart BIZHOST to use the new version.${R}"
+    else
+        rm -f "$TMPFILE"
+        echo -e "\n  ${RED}[✗] Update failed.${R}"
+        echo -e "  ${DIM}Check internet connection and try again.${R}"
+    fi
+    sleep 3.5
+}
+
+# ═══════════════════════════════════
+#              BOOT
+# ═══════════════════════════════════
+clear
+draw_banner
+echo -e "  ${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${R}"
+echo -e "  ${YLW}        ⚡ BIZ HOST v$VERSION — BIZ FACTORY ⚡${R}"
+echo -e "  ${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${R}\n"
+echo -e "  ${DIM}Initializing...${R}"
+sleep 0.4
+echo -e "  ${DIM}Loading config...${R}"
+sleep 0.3
+echo -e "  ${GRN}Ready.${R}"
+sleep 0.6
+
+# ═══════════════════════════════════
+#              MAIN LOOP
+# ═══════════════════════════════════
+while true; do
+    draw_menu
+    read -r opt
+
+    case "$opt" in
+        1) clear; start_server ;;
+        2) clear; create_tunnel ;;
+        3) clear; stop_tunnel ;;
+        4) clear; stop_server ;;
+        5) cd "$SITE" && bash ;;
+        6) clear; set_directory ;;
+        7) clear; set_port ;;
+        8) view_logs ;;
+        9) show_info ;;
+        u|U) do_update ;;
+        x|X)
+            echo -e "\n  ${YLW}Goodbye from BIZ FACTORY!${R}"
+            sleep 0.8
+            exit 0
+            ;;
+        *)
+            echo -e "  ${RED}[!] Invalid option${R}"
+            sleep 0.8
+            ;;
+    esac
+done
