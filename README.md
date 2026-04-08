@@ -36,7 +36,7 @@ Open Termux and run:
 
 ```bash
 apt update && apt install git -y
-git clone https://github.com/mkhossainx/BIZHOST.git
+git clone https://github.com/bizft/BIZHOST.git
 cd BIZHOST
 chmod +x install bizhost
 ./install
