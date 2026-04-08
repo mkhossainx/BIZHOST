@@ -4,7 +4,7 @@
 # ║  PHP Hosting Terminal for Termux ║
 # ╚══════════════════════════════════╝
 
-VERSION="2.1"
+VERSION="2.2"
 CONFIG="$PREFIX/tmp/bizhost.conf"
 PIDFILE="$PREFIX/tmp/bizhost.pid"
 WATCHDOG="$PREFIX/tmp/bizhost.watchdog"
@@ -39,10 +39,40 @@ save_config() {
 mkdir -p "$SITE"
 
 # ─── STATUS CHECKS ───
-# Check by actually hitting the port — avoids PID race conditions
+# Multi-method port check — no curl required
+is_port_open() {
+    local p=$1
+
+    # Method 1: ss (iproute2 — standard in Termux)
+    if command -v ss > /dev/null 2>&1; then
+        ss -tlnp 2>/dev/null | grep -qE ":${p}( |$)" && return 0
+    fi
+
+    # Method 2: netstat fallback
+    if command -v netstat > /dev/null 2>&1; then
+        netstat -tlnp 2>/dev/null | grep -qE ":${p}( |$)" && return 0
+    fi
+
+    # Method 3: /proc/net/tcp — always present on Android/Linux
+    # 127.0.0.1 in little-endian hex = 0100007F
+    local hex_port
+    hex_port=$(printf '%04X' "$p")
+    if [ -f /proc/net/tcp ]; then
+        grep -qi "0100007F:${hex_port}" /proc/net/tcp 2>/dev/null && return 0
+        grep -qi "00000000:${hex_port}" /proc/net/tcp 2>/dev/null && return 0
+    fi
+
+    # Method 4: curl (last resort — may not be installed)
+    if command -v curl > /dev/null 2>&1; then
+        curl -sf --connect-timeout 1 --max-time 2 \
+             "http://127.0.0.1:${p}/" > /dev/null 2>&1 && return 0
+    fi
+
+    return 1
+}
+
 is_server_running() {
-    curl -sf --connect-timeout 1 --max-time 2 \
-         "http://127.0.0.1:$PORT/" > /dev/null 2>&1
+    is_port_open "$PORT"
 }
 
 is_tunnel_running() {
@@ -181,13 +211,12 @@ start_server() {
     WDOG_PID=$!
     echo "$WDOG_PID" > "$WATCHDOG"
 
-    # Poll until server actually responds (max 15s)
+    # Poll until port is open (max 15s) — no curl needed
     echo -ne "  ${DIM}Waiting for PHP"
     SUCCESS=0
     for i in $(seq 1 30); do
         sleep 0.5
-        if curl -sf --connect-timeout 1 --max-time 1 \
-                "http://127.0.0.1:$PORT/" > /dev/null 2>&1; then
+        if is_port_open "$PORT"; then
             SUCCESS=1; break
         fi
         echo -ne "."
