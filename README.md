@@ -16,7 +16,6 @@ BIZHOST turns your Android device into a PHP hosting environment with public int
 - ✅ **Colored server logs** — View live logs with color-coded status codes
 - ✅ **System Info panel** — PHP version, cloudflared version, disk usage
 - ✅ **Smarter install** — Pre-flight internet/Termux checks, fallback cloudflared download
-- ✅ **Better index.php** — Clean dark-themed default landing page
 - ✅ **Bug fixes** — Stop server now uses stored PID (won't kill unrelated PHP), config uses key=value format
 
 ---
