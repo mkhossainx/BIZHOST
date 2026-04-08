@@ -4,7 +4,7 @@
 # ║  PHP Hosting Terminal for Termux ║
 # ╚══════════════════════════════════╝
 
-VERSION="2.2"
+VERSION="2.1"
 CONFIG="$PREFIX/tmp/bizhost.conf"
 PIDFILE="$PREFIX/tmp/bizhost.pid"
 WATCHDOG="$PREFIX/tmp/bizhost.watchdog"
@@ -39,13 +39,10 @@ save_config() {
 mkdir -p "$SITE"
 
 # ─── STATUS CHECKS ───
-# Most reliable in Termux: check if PHP PID is alive
+# Check by actually hitting the port — avoids PID race conditions
 is_server_running() {
-    [ -f "$PIDFILE" ] || return 1
-    local pid
-    pid=$(cat "$PIDFILE" 2>/dev/null)
-    [ -n "$pid" ] || return 1
-    kill -0 "$pid" 2>/dev/null
+    curl -sf --connect-timeout 1 --max-time 2 \
+         "http://127.0.0.1:$PORT/" > /dev/null 2>&1
 }
 
 is_tunnel_running() {
@@ -161,75 +158,66 @@ start_server() {
 
     echo -e "  ${CYN}[~] Starting PHP server on port ${PORT}...${R}"
 
-    # Kill anything stale on our port
-    if [ -f "$PIDFILE" ]; then
-        kill "$(cat "$PIDFILE")" 2>/dev/null
-        rm -f "$PIDFILE"
-    fi
+    # Clean up stale state
+    pkill -f "php -S 127.0.0.1:$PORT" 2>/dev/null
     if [ -f "$WATCHDOG" ]; then
         kill "$(cat "$WATCHDOG")" 2>/dev/null
         rm -f "$WATCHDOG"
     fi
-    pkill -f "php -S 127.0.0.1:$PORT" 2>/dev/null
-    sleep 0.5
+    rm -f "$PIDFILE"
 
-    # Start PHP directly and capture PID immediately
-    php -S "127.0.0.1:$PORT" -t "$SITE" >> "$SERVER_LOG" 2>&1 &
-    PHP_PID=$!
-    echo "$PHP_PID" > "$PIDFILE"
+    # Start watchdog + PHP in background
+    (
+        while true; do
+            php -S "127.0.0.1:$PORT" -t "$SITE" >> "$SERVER_LOG" 2>&1 &
+            PHP_PID=$!
+            echo "$PHP_PID" > "$PIDFILE"
+            wait "$PHP_PID"
+            # Stop restarting if watchdog file was removed (manual stop)
+            [ -f "$WATCHDOG" ] || break
+            sleep 1
+        done
+    ) &
+    WDOG_PID=$!
+    echo "$WDOG_PID" > "$WATCHDOG"
 
-    # Wait up to 6 seconds for process to stay alive
-    echo -ne "  ${DIM}Starting"
+    # Poll until server actually responds (max 15s)
+    echo -ne "  ${DIM}Waiting for PHP"
     SUCCESS=0
-    for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    for i in $(seq 1 30); do
         sleep 0.5
-        echo -ne "."
-        if kill -0 "$PHP_PID" 2>/dev/null; then
-            SUCCESS=1
-            break
+        if curl -sf --connect-timeout 1 --max-time 1 \
+                "http://127.0.0.1:$PORT/" > /dev/null 2>&1; then
+            SUCCESS=1; break
         fi
+        echo -ne "."
     done
     echo -e "${R}"
 
     if [ "$SUCCESS" -eq 1 ]; then
-        # Start watchdog in background to auto-restart if it crashes later
-        (
-            while true; do
-                wait "$PHP_PID" 2>/dev/null
-                [ -f "$WATCHDOG" ] || break
-                sleep 1
-                php -S "127.0.0.1:$PORT" -t "$SITE" >> "$SERVER_LOG" 2>&1 &
-                PHP_PID=$!
-                echo "$PHP_PID" > "$PIDFILE"
-            done
-        ) &
-        echo $! > "$WATCHDOG"
-
         echo -e "  ${GRN}╔═══════════════════════════╗${R}"
         echo -e "  ${GRN}║  ✓ Server Started!        ║${R}"
         echo -e "  ${GRN}╠═══════════════════════════╣${R}"
         echo -e "  ${GRN}║${R} Local: ${CYN}http://localhost:${PORT}${R}"
-        echo -e "  ${GRN}║${R} PID  : ${DIM}${PHP_PID}${R}"
         echo -e "  ${GRN}║${R} Root : ${DIM}${SITE}${R}"
         echo -e "  ${GRN}╚═══════════════════════════╝${R}"
     else
-        rm -f "$PIDFILE"
-        # Show actual PHP error from log
-        LAST_ERR=$(tail -5 "$SERVER_LOG" 2>/dev/null)
+        # Server didn't respond — cleanup and explain
+        kill "$WDOG_PID" 2>/dev/null
+        rm -f "$WATCHDOG"
+        if [ -f "$PIDFILE" ]; then
+            kill "$(cat "$PIDFILE")" 2>/dev/null
+            rm -f "$PIDFILE"
+        fi
         echo -e "  ${RED}╔═══════════════════════════╗${R}"
         echo -e "  ${RED}║  ✗ Server Failed to Start ║${R}"
         echo -e "  ${RED}╠═══════════════════════════╣${R}"
-        if [ -n "$LAST_ERR" ]; then
-            echo -e "  ${RED}║${R} ${YLW}Error:${R}"
-            echo "$LAST_ERR" | while IFS= read -r line; do
-                echo -e "  ${DIM}  $line${R}"
-            done
-        else
-            echo -e "  ${RED}║${R} ${DIM}• Port $PORT may be in use${R}"
-            echo -e "  ${RED}║${R} ${DIM}  → Use [7] to change port${R}"
-            echo -e "  ${RED}║${R} ${DIM}• php not installed${R}"
-            echo -e "  ${RED}║${R} ${DIM}  → pkg install php${R}"
-        fi
+        echo -e "  ${RED}║${R} Possible causes:"
+        echo -e "  ${RED}║${R} ${DIM}• php not installed${R}"
+        echo -e "  ${RED}║${R} ${DIM}  → pkg install php${R}"
+        echo -e "  ${RED}║${R} ${DIM}• Port $PORT in use${R}"
+        echo -e "  ${RED}║${R} ${DIM}  → Use [7] to change port${R}"
+        echo -e "  ${RED}║${R} ${DIM}• Site dir missing${R}"
         echo -e "  ${RED}╚═══════════════════════════╝${R}"
     fi
     sleep 3
@@ -328,8 +316,16 @@ stop_server() {
         rm -f "$PIDFILE"
     fi
 
-    sleep 0.5
-    echo -e "  ${GRN}[✔] Server stopped.${R}"
+    # Final sweep on our specific port
+    pkill -f "php -S 127.0.0.1:$PORT" 2>/dev/null
+    sleep 1
+
+    if is_server_running; then
+        echo -e "  ${RED}[!] Server still responding on :${PORT}${R}"
+        echo -e "  ${DIM}Try: pkill php${R}"
+    else
+        echo -e "  ${GRN}[✔] Server stopped.${R}"
+    fi
     sleep 1.5
 }
 
